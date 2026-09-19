@@ -1,0 +1,13 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+.claude/
+mlflow.db
+mlruns/
+catboost_info/
+data/
+probe_*.json
+scratchpad_report.html
+csv_profiler_space/
