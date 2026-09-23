@@ -1,0 +1,479 @@
+{
+ "source": "MLflow run 5898a97a6dc243ca97d388ff341f85ac (experiment agentic-ds-framework, agentic_telco_churn_seed42)",
+ "file_name": "telco_churn.csv",
+ "target_column": "Churn",
+ "positive_label": "Yes",
+ "rows": 7043,
+ "config": {
+  "seed": 42,
+  "max_iterations": 5,
+  "performance_target": 0.85
+ },
+ "stage_seconds_total": {
+  "profiler": 0.4761,
+  "cleaner": 2.9457,
+  "feature_engineer": 5.0924,
+  "model_selector": 119.4549,
+  "evaluator": 22.0563,
+  "reflection": 20.8088
+ },
+ "optuna_seconds_per_call": [
+  8.1236,
+  3.8238,
+  24.4301,
+  12.0319,
+  62.6088
+ ],
+ "result": {
+  "system": "agentic",
+  "dataset": "telco_churn",
+  "seed": 42,
+  "success": true,
+  "accuracy": 0.7686,
+  "f1_weighted": 0.7782,
+  "auc_roc": 0.84,
+  "recall_pos": 0.7433,
+  "precision_pos": 0.5472,
+  "threshold_used": 0.47000000000000003,
+  "runtime_wallclock_sec": 170.93,
+  "model_train_time_sec": 1.4565,
+  "used_fallback": false,
+  "failure_cause": null,
+  "stage_automation": {
+   "profiling": true,
+   "cleaning": true,
+   "feature_engineering": true,
+   "model_selection": true,
+   "hyperparameter_tuning": true,
+   "evaluation": true
+  },
+  "events": [
+   {
+    "stage": "model_selection",
+    "type": "tuning_case",
+    "message": "initial_pass: model=lightgbm, n_trials=25, subsampled=False, class_weighting=False"
+   },
+   {
+    "stage": "feature_engineering",
+    "type": "instruction_applied",
+    "message": "change categorical_encoding from 'onehot' to 'ordinal' to rank categories by their out-of-fold relationship to the target, reducing spurious feature dimensions and improving precision; also add numeric_transform 'log' to handle any right-skewed non-negative columns that may be inflating noise in the feature space"
+   },
+   {
+    "stage": "model_selection",
+    "type": "tuning_case",
+    "message": "upstream_retune: model=lightgbm, n_trials=10, subsampled=False, class_weighting=False"
+   },
+   {
+    "stage": "model_selection",
+    "type": "instruction_applied",
+    "message": "switch model from lightgbm to xgboost to gain more expressive capacity for the reduced feature set; xgboost's regularization and interaction handling will better utilize the 19 ordinal/log-transformed features without requiring the sparse 45-feature space. Keep use_class_weighting=false for now since class balance is not severely imbalanced."
+   },
+   {
+    "stage": "model_selection",
+    "type": "tuning_case",
+    "message": "model_reselect: model=xgboost, n_trials=25, subsampled=False, class_weighting=False"
+   },
+   {
+    "stage": "feature_engineering",
+    "type": "instruction_applied",
+    "message": "revert numeric_transform from 'log' to 'none' and change categorical_encoding from 'ordinal' to 'target' to restore discriminative power while keeping dimensionality manageable. Target encoding will rank categories by their direct relationship to the outcome (unlike ordinal's out-of-fold ranking), and removing the log transform will preserve the original scale information for numeric features. This should recover precision without returning to the 45-feature sparse space."
+   },
+   {
+    "stage": "model_selection",
+    "type": "tuning_case",
+    "message": "upstream_retune: model=xgboost, n_trials=10, subsampled=False, class_weighting=False"
+   },
+   {
+    "stage": "model_selection",
+    "type": "instruction_applied",
+    "message": "Enable use_class_weighting=true on xgboost (which will apply scale_pos_weight internally) to shift the model's learned decision boundary toward the minority class during training, reducing reliance on threshold manipulation. This is a training-time correction that works with the model's regularization rather than against it, unlike the current low threshold (0.229) which is a post-hoc band-aid. Keep categorical_encoding at 'target' and numeric_transform at 'none' since AUC-ROC is stable; the problem is precision collapse from threshold drift, not feature weakness."
+   },
+   {
+    "stage": "model_selection",
+    "type": "tuning_case",
+    "message": "model_reselect: model=random_forest, n_trials=25, subsampled=False, class_weighting=True"
+   }
+  ],
+  "iteration_count": 5,
+  "iteration_metrics": [
+   {
+    "iteration": 1,
+    "acted_on_component": null,
+    "acted_on_instruction": null,
+    "cleaning_plan": {
+     "drop_columns": [],
+     "treat_as_null_columns": [
+      "TotalCharges"
+     ],
+     "coerce_numeric_columns": [
+      "TotalCharges"
+     ],
+     "date_columns": {},
+     "numeric_impute": "median",
+     "categorical_impute": "mode",
+     "null_drop_threshold": 0.5,
+     "drop_duplicates": false,
+     "derived_fills": {
+      "TotalCharges": {
+       "method": "product",
+       "source_columns": [
+        "tenure",
+        "MonthlyCharges"
+       ],
+       "when_column": null,
+       "when_value": null,
+       "fill_value": 0.0
+      }
+     }
+    },
+    "feature_plan": {
+     "categorical_encoding": "onehot",
+     "scale_numeric": true,
+     "scaler": "standard",
+     "numeric_transform": "none",
+     "quantile_bins": null,
+     "drop_near_zero_variance": true,
+     "select_top_k_features": null
+    },
+    "final_feature_count": 45,
+    "model": "lightgbm",
+    "best_params": {
+     "n_estimators": 203,
+     "max_depth": 4,
+     "learning_rate": 0.027010527749605478,
+     "num_leaves": 51
+    },
+    "tuning_case": "initial_pass",
+    "threshold": 0.343,
+    "use_class_weighting": false,
+    "class_weight_ratio": null,
+    "calibration_metric_used": "f1",
+    "accuracy": 0.7729,
+    "f1_weighted": 0.7809,
+    "recall_pos": 0.7139,
+    "precision_pos": 0.5563,
+    "auc_roc": 0.847,
+    "train_auc_roc": 0.8822,
+    "train_test_gap": 0.0352,
+    "overfitting_flag": false,
+    "underfitting_flag": false,
+    "diagnosis": {
+     "weakest_component": "feature_engineering",
+     "failure_mode": "precision_pos at 0.5563 is weak relative to recall_pos (0.7139) and AUC-ROC (0.847), indicating the model is flagging too many false positives; onehot encoding of categorical variables creates 45 sparse features that may not capture ordinal structure in the data, and numeric columns are scaled but not transformed despite potential skew",
+     "instruction": "change categorical_encoding from 'onehot' to 'ordinal' to rank categories by their out-of-fold relationship to the target, reducing spurious feature dimensions and improving precision; also add numeric_transform 'log' to handle any right-skewed non-negative columns that may be inflating noise in the feature space",
+     "calibration_metric": "f1"
+    },
+    "no_improvement_streak": 0,
+    "stop_reason": null,
+    "selected_as_final": false
+   },
+   {
+    "iteration": 2,
+    "acted_on_component": "feature_engineering",
+    "acted_on_instruction": "change categorical_encoding from 'onehot' to 'ordinal' to rank categories by their out-of-fold relationship to the target, reducing spurious feature dimensions and improving precision; also add numeric_transform 'log' to handle any right-skewed non-negative columns that may be inflating noise in the feature space",
+    "cleaning_plan": {
+     "drop_columns": [],
+     "treat_as_null_columns": [
+      "TotalCharges"
+     ],
+     "coerce_numeric_columns": [
+      "TotalCharges"
+     ],
+     "date_columns": {},
+     "numeric_impute": "median",
+     "categorical_impute": "mode",
+     "null_drop_threshold": 0.5,
+     "drop_duplicates": false,
+     "derived_fills": {
+      "TotalCharges": {
+       "method": "product",
+       "source_columns": [
+        "tenure",
+        "MonthlyCharges"
+       ],
+       "when_column": null,
+       "when_value": null,
+       "fill_value": 0.0
+      }
+     }
+    },
+    "feature_plan": {
+     "categorical_encoding": "ordinal",
+     "scale_numeric": true,
+     "scaler": "standard",
+     "numeric_transform": "log",
+     "quantile_bins": null,
+     "drop_near_zero_variance": true,
+     "select_top_k_features": null
+    },
+    "final_feature_count": 19,
+    "model": "lightgbm",
+    "best_params": {
+     "n_estimators": 126,
+     "max_depth": 3,
+     "learning_rate": 0.1024932221692416,
+     "num_leaves": 60
+    },
+    "tuning_case": "upstream_retune",
+    "threshold": 0.356,
+    "use_class_weighting": false,
+    "class_weight_ratio": null,
+    "calibration_metric_used": "f1",
+    "accuracy": 0.7729,
+    "f1_weighted": 0.7807,
+    "recall_pos": 0.7112,
+    "precision_pos": 0.5565,
+    "auc_roc": 0.8421,
+    "train_auc_roc": 0.8795,
+    "train_test_gap": 0.0374,
+    "overfitting_flag": false,
+    "underfitting_flag": false,
+    "diagnosis": {
+     "weakest_component": "model_selection",
+     "failure_mode": "AUC-ROC dropped from 0.847 to 0.8421 after the feature engineering change; precision_pos remains stuck at 0.5565 despite ordinal encoding and log transform reducing feature count from 45 to 19. The model is not expressing enough signal to separate classes effectively \u2014 underfitting, not overfitting (train_test_gap is small and stable at ~0.037). LightGBM with shallow trees (max_depth 3) is too weak for this problem.",
+     "instruction": "switch model from lightgbm to xgboost to gain more expressive capacity for the reduced feature set; xgboost's regularization and interaction handling will better utilize the 19 ordinal/log-transformed features without requiring the sparse 45-feature space. Keep use_class_weighting=false for now since class balance is not severely imbalanced.",
+     "calibration_metric": "f1"
+    },
+    "no_improvement_streak": 1,
+    "stop_reason": null,
+    "selected_as_final": false
+   },
+   {
+    "iteration": 3,
+    "acted_on_component": "model_selection",
+    "acted_on_instruction": "switch model from lightgbm to xgboost to gain more expressive capacity for the reduced feature set; xgboost's regularization and interaction handling will better utilize the 19 ordinal/log-transformed features without requiring the sparse 45-feature space. Keep use_class_weighting=false for now since class balance is not severely imbalanced.",
+    "cleaning_plan": {
+     "drop_columns": [],
+     "treat_as_null_columns": [
+      "TotalCharges"
+     ],
+     "coerce_numeric_columns": [
+      "TotalCharges"
+     ],
+     "date_columns": {},
+     "numeric_impute": "median",
+     "categorical_impute": "mode",
+     "null_drop_threshold": 0.5,
+     "drop_duplicates": false,
+     "derived_fills": {
+      "TotalCharges": {
+       "method": "product",
+       "source_columns": [
+        "tenure",
+        "MonthlyCharges"
+       ],
+       "when_column": null,
+       "when_value": null,
+       "fill_value": 0.0
+      }
+     }
+    },
+    "feature_plan": {
+     "categorical_encoding": "ordinal",
+     "scale_numeric": true,
+     "scaler": "standard",
+     "numeric_transform": "log",
+     "quantile_bins": null,
+     "drop_near_zero_variance": true,
+     "select_top_k_features": null
+    },
+    "final_feature_count": 19,
+    "model": "xgboost",
+    "best_params": {
+     "n_estimators": 243,
+     "max_depth": 2,
+     "learning_rate": 0.0391075478200794,
+     "subsample": 0.6417886764865421
+    },
+    "tuning_case": "model_reselect",
+    "threshold": 0.291,
+    "use_class_weighting": false,
+    "class_weight_ratio": null,
+    "calibration_metric_used": "f1",
+    "accuracy": 0.753,
+    "f1_weighted": 0.7653,
+    "recall_pos": 0.7781,
+    "precision_pos": 0.5234,
+    "auc_roc": 0.8473,
+    "train_auc_roc": 0.8625,
+    "train_test_gap": 0.0152,
+    "overfitting_flag": false,
+    "underfitting_flag": false,
+    "diagnosis": {
+     "weakest_component": "feature_engineering",
+     "failure_mode": "precision_pos has collapsed from 0.5565 to 0.5234 while recall_pos climbed to 0.7781, indicating the model is now flagging too many false positives. The ordinal encoding + log transform reduced feature count to 19, but this aggressive dimensionality reduction may have stripped away discriminative signal needed to separate true positives from false positives. AUC-ROC recovered slightly (0.8473) but precision degradation and the low threshold (0.291) suggest the feature set is now too sparse to support precise classification.",
+     "instruction": "revert numeric_transform from 'log' to 'none' and change categorical_encoding from 'ordinal' to 'target' to restore discriminative power while keeping dimensionality manageable. Target encoding will rank categories by their direct relationship to the outcome (unlike ordinal's out-of-fold ranking), and removing the log transform will preserve the original scale information for numeric features. This should recover precision without returning to the 45-feature sparse space.",
+     "calibration_metric": "f1"
+    },
+    "no_improvement_streak": 0,
+    "stop_reason": null,
+    "selected_as_final": false
+   },
+   {
+    "iteration": 4,
+    "acted_on_component": "feature_engineering",
+    "acted_on_instruction": "revert numeric_transform from 'log' to 'none' and change categorical_encoding from 'ordinal' to 'target' to restore discriminative power while keeping dimensionality manageable. Target encoding will rank categories by their direct relationship to the outcome (unlike ordinal's out-of-fold ranking), and removing the log transform will preserve the original scale information for numeric features. This should recover precision without returning to the 45-feature sparse space.",
+    "cleaning_plan": {
+     "drop_columns": [],
+     "treat_as_null_columns": [
+      "TotalCharges"
+     ],
+     "coerce_numeric_columns": [
+      "TotalCharges"
+     ],
+     "date_columns": {},
+     "numeric_impute": "median",
+     "categorical_impute": "mode",
+     "null_drop_threshold": 0.5,
+     "drop_duplicates": false,
+     "derived_fills": {
+      "TotalCharges": {
+       "method": "product",
+       "source_columns": [
+        "tenure",
+        "MonthlyCharges"
+       ],
+       "when_column": null,
+       "when_value": null,
+       "fill_value": 0.0
+      }
+     }
+    },
+    "feature_plan": {
+     "categorical_encoding": "target",
+     "scale_numeric": true,
+     "scaler": "standard",
+     "numeric_transform": "none",
+     "quantile_bins": null,
+     "drop_near_zero_variance": true,
+     "select_top_k_features": null
+    },
+    "final_feature_count": 19,
+    "model": "xgboost",
+    "best_params": {
+     "n_estimators": 198,
+     "max_depth": 2,
+     "learning_rate": 0.07896186801026692,
+     "subsample": 0.6682096494749166
+    },
+    "tuning_case": "upstream_retune",
+    "threshold": 0.229,
+    "use_class_weighting": false,
+    "class_weight_ratio": null,
+    "calibration_metric_used": "f1",
+    "accuracy": 0.7225,
+    "f1_weighted": 0.7385,
+    "recall_pos": 0.8342,
+    "precision_pos": 0.4867,
+    "auc_roc": 0.8471,
+    "train_auc_roc": 0.8702,
+    "train_test_gap": 0.0231,
+    "overfitting_flag": false,
+    "underfitting_flag": false,
+    "diagnosis": {
+     "weakest_component": "model_selection",
+     "failure_mode": "Precision_pos has deteriorated from 0.5565 (iteration 2) to 0.4867 (iteration 4) while recall_pos climbed to 0.8342. The model is now aggressively flagging positives with a very low threshold (0.229), generating excessive false positives. AUC-ROC is stable at ~0.847, indicating the model has adequate discriminative capacity, but the decision boundary is misaligned. XGBoost with max_depth=2 and target encoding is too permissive; the shallow tree combined with target-encoded features that directly encode class relationship is pushing the model toward the minority class without sufficient regularization to maintain precision.",
+     "instruction": "Enable use_class_weighting=true on xgboost (which will apply scale_pos_weight internally) to shift the model's learned decision boundary toward the minority class during training, reducing reliance on threshold manipulation. This is a training-time correction that works with the model's regularization rather than against it, unlike the current low threshold (0.229) which is a post-hoc band-aid. Keep categorical_encoding at 'target' and numeric_transform at 'none' since AUC-ROC is stable; the problem is precision collapse from threshold drift, not feature weakness.",
+     "calibration_metric": "f1"
+    },
+    "no_improvement_streak": 1,
+    "stop_reason": null,
+    "selected_as_final": false
+   },
+   {
+    "iteration": 5,
+    "acted_on_component": "model_selection",
+    "acted_on_instruction": "Enable use_class_weighting=true on xgboost (which will apply scale_pos_weight internally) to shift the model's learned decision boundary toward the minority class during training, reducing reliance on threshold manipulation. This is a training-time correction that works with the model's regularization rather than against it, unlike the current low threshold (0.229) which is a post-hoc band-aid. Keep categorical_encoding at 'target' and numeric_transform at 'none' since AUC-ROC is stable; the problem is precision collapse from threshold drift, not feature weakness.",
+    "cleaning_plan": {
+     "drop_columns": [],
+     "treat_as_null_columns": [
+      "TotalCharges"
+     ],
+     "coerce_numeric_columns": [
+      "TotalCharges"
+     ],
+     "date_columns": {},
+     "numeric_impute": "median",
+     "categorical_impute": "mode",
+     "null_drop_threshold": 0.5,
+     "drop_duplicates": false,
+     "derived_fills": {
+      "TotalCharges": {
+       "method": "product",
+       "source_columns": [
+        "tenure",
+        "MonthlyCharges"
+       ],
+       "when_column": null,
+       "when_value": null,
+       "fill_value": 0.0
+      }
+     }
+    },
+    "feature_plan": {
+     "categorical_encoding": "target",
+     "scale_numeric": true,
+     "scaler": "standard",
+     "numeric_transform": "none",
+     "quantile_bins": null,
+     "drop_near_zero_variance": true,
+     "select_top_k_features": null
+    },
+    "final_feature_count": 19,
+    "model": "random_forest",
+    "best_params": {
+     "n_estimators": 211,
+     "max_depth": 19,
+     "min_samples_split": 4
+    },
+    "tuning_case": "model_reselect",
+    "threshold": 0.47000000000000003,
+    "use_class_weighting": true,
+    "class_weight_ratio": 2.768561872909699,
+    "calibration_metric_used": "f1",
+    "accuracy": 0.7686,
+    "f1_weighted": 0.7782,
+    "recall_pos": 0.7433,
+    "precision_pos": 0.5472,
+    "auc_roc": 0.84,
+    "train_auc_roc": 0.9998,
+    "train_test_gap": 0.1598,
+    "overfitting_flag": true,
+    "underfitting_flag": false,
+    "diagnosis": {
+     "weakest_component": "model_selection",
+     "failure_mode": "Random forest with use_class_weighting=true and max_depth=19 is severely overfitting: train_auc_roc=0.9998 vs test_auc_roc=0.84 (train_test_gap=0.1598). The model memorized the training data rather than learning generalizable patterns. Test AUC-ROC dropped from 0.8471 (iteration 4) to 0.84, and precision_pos remains stuck at 0.5472. The deep tree (max_depth=19) with class weighting is too expressive for the 19-feature space and is overfitting despite the weighting.",
+     "instruction": "switch model from random_forest to logistic_regression with use_class_weighting=true. Logistic regression is a linear model that cannot overfit in the same way\u2014it will force the model to learn a simple, generalizable decision boundary while class weighting shifts that boundary toward the minority class during training. This eliminates the memorization problem while preserving the class-weighting correction. Keep categorical_encoding at 'target' and numeric_transform at 'none'.",
+     "calibration_metric": "f1"
+    },
+    "no_improvement_streak": 2,
+    "stop_reason": "iteration_cap_reached",
+    "selected_as_final": true
+   }
+  ],
+  "api_token_cost_usd": 0.036222,
+  "extra_params": {
+   "final_model": "random_forest",
+   "best_iteration": "5",
+   "last_iteration": "5",
+   "train_auc_roc": "0.9998",
+   "train_test_gap": "0.1598",
+   "overfitting_flag": "True",
+   "underfitting_flag": "False",
+   "use_class_weighting": "True",
+   "class_weight_ratio": "2.768561872909699",
+   "calibration_metric": "f1",
+   "max_iterations": "5",
+   "optuna_trials_override": "None",
+   "optuna_trials_first": "25",
+   "optuna_trials_retune": "10",
+   "performance_target": "0.85",
+   "stop_reason": "iteration_cap_reached",
+   "stage_wallclock_sec": "{'profiler': 0.4761, 'cleaner': 2.9457, 'feature_engineer': 5.0924, 'model_selector': 119.4549, 'evaluator': 22.0563, 'reflection': 20.8088}",
+   "optuna_wallclock_sec_total": "111.0182",
+   "optuna_wallclock_sec_per_call": "[8.1236, 3.8238, 24.4301, 12.0319, 62.6088]",
+   "token_usage_by_agent": "{'cleaning': {'input_tokens': 2264, 'output_tokens': 154}, 'feature_engineering': {'input_tokens': 3034, 'output_tokens': 255}, 'model_selection': {'input_tokens': 2153, 'output_tokens': 424}, 'reflection': {'input_tokens': 17831, 'output_tokens': 1355}}",
+   "cost_by_agent_usd": "{'cleaning': 0.003034, 'feature_engineering': 0.004309, 'model_selection': 0.004273, 'reflection': 0.024606}"
+  }
+ }
+}

@@ -11,3 +11,4 @@ data/
 probe_*.json
 scratchpad_report.html
 csv_profiler_space/
+.streamlit/secrets.toml
