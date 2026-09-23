@@ -1,0 +1,14 @@
+streamlit>=1.40
+pandas>=2.2
+numpy>=1.26
+scikit-learn>=1.5
+optuna>=4.0
+xgboost>=2.1
+lightgbm>=4.5
+catboost>=1.2
+pydantic>=2.8
+langgraph>=0.2
+langchain-core>=0.3
+langchain-anthropic>=0.3
+mlflow-skinny>=2.16
+fpdf2>=2.8

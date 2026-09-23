@@ -1,299 +1,411 @@
 import io
+import json
 import os
-import pickle
+import subprocess
+import sys
+import tempfile
 import time
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
-from experiment_common import DATASETS, automation_score, load_dataset, make_split
-from pipeline import (
-    MAX_ITERATIONS_FULL,
-    NO_IMPROVEMENT_EPSILON,
-    NO_IMPROVEMENT_PATIENCE,
-    PERFORMANCE_TARGET,
-    build_result_from_state,
-    run_agentic_streaming,
+import autods_core as core
+
+APP_DIR = Path(__file__).parent
+MAX_CONCURRENT_LIVE_RUNS = 2
+MAX_RUN_SECONDS = 30 * 60
+DEFAULT_MAX_ITERATIONS = 5
+DEFAULT_TARGET_AUC = 0.85
+
+st.set_page_config(page_title="AutoDS", page_icon="🔶", layout="wide", initial_sidebar_state="expanded")
+
+LOGO = (
+    '<svg viewBox="0 0 52 48" aria-hidden="true"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">'
+    '<stop offset="0" stop-color="#C9CACC"/><stop offset="1" stop-color="#7A7C80"/></linearGradient></defs>'
+    '<path d="M26 2l23 17-9 26H12L3 19z" fill="#FF8A3D"/>'
+    '<path d="M26 11l15 11-5.5 17h-19L11 22z" fill="url(#g)"/>'
+    '<path d="M19 45l7-19 7 19z" fill="#FF8A3D"/></svg>'
+)
+FILE_ICON = (
+    '<svg viewBox="0 0 56 66" aria-hidden="true"><path d="M4 4h32l16 16v42H4z" fill="#FF8A3D"/>'
+    '<path d="M36 4v16h16z" fill="#FFC79D"/><path d="M14 34h28M14 43h28M14 52h28" stroke="#fff" stroke-width="4" stroke-linecap="round"/></svg>'
+)
+CHECK_ICON = (
+    '<svg class="ok" viewBox="0 0 68 68" aria-hidden="true"><circle cx="34" cy="34" r="30" fill="none" stroke="#7DBB8E" stroke-width="3" stroke-dasharray="7 6"/>'
+    '<path d="M20 35l10 10 19-20" fill="none" stroke="#3B9A4A" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+)
+CLOCK_ICON = (
+    '<svg viewBox="0 0 26 26" aria-hidden="true"><circle cx="13" cy="13" r="10.5" fill="none" stroke="#FF8A3D" stroke-width="2.5"/>'
+    '<path d="M13 7v6.5l4 2.5" fill="none" stroke="#FF8A3D" stroke-width="2.5" stroke-linecap="round"/></svg>'
 )
 
-st.set_page_config(page_title="AutoDS", page_icon="🔶", layout="wide")
-
-AGENT_ORDER = ["profiler", "cleaner", "feature_engineer", "model_selector", "evaluator", "reflection"]
-AGENT_LABELS = {
-    "profiler": "1. Data Profiling",
-    "cleaner": "2. Data Cleaning",
-    "feature_engineer": "3. Feature Engineering",
-    "model_selector": "4. Model Selection",
-    "evaluator": "5. Evaluation Agent",
-    "reflection": "6. Reflection Agent",
-}
-
-
 for key, default in {
-    "page": "Setup", "pending_run": None, "last_state": None,
-    "run_result": None, "run_config": None,
+    "page": "Setup", "run": None, "report": None, "seed": 42,
+    "max_iterations": DEFAULT_MAX_ITERATIONS, "target_auc": DEFAULT_TARGET_AUC,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
 
 
-def compute_agent_statuses(state: dict) -> dict:
-    stopped = state.get("stop_reason") is not None
-    current_iter = state["iteration"] if stopped else state["iteration"] + 1
-
-    counts, last_duration = {}, {}
-    for entry in state["stage_timings"]:
-        counts[entry["stage"]] = counts.get(entry["stage"], 0) + 1
-        last_duration[entry["stage"]] = entry["duration_sec"]
-
-    statuses, found_running = {}, False
-    for agent in AGENT_ORDER:
-        expected = 1 if agent == "profiler" else max(current_iter, 1)
-        if counts.get(agent, 0) >= expected:
-            statuses[agent] = ("completed", last_duration.get(agent))
-        elif not found_running:
-            statuses[agent] = ("running", None)
-            found_running = True
-        else:
-            statuses[agent] = ("pending", None)
-    return statuses
+@st.cache_resource
+def process_registry() -> dict:
+    return {}
 
 
-def chart_points(state: dict) -> pd.DataFrame:
-    rows = [
-        {"iteration": e["iteration"], "AUC-ROC": e.get("auc_roc"), "F1 Score": e.get("f1_weighted")}
-        for e in state["iteration_history"]
-    ]
-    metrics = state.get("metrics")
-    current_iter = state["iteration"] + 1
-    if metrics and (not rows or rows[-1]["iteration"] != current_iter):
-        rows.append({"iteration": current_iter, "AUC-ROC": metrics.get("auc_roc"), "F1 Score": metrics.get("f1_weighted")})
-    return pd.DataFrame(rows)
+@st.cache_data(show_spinner=False)
+def inspect_csv(data: bytes) -> dict:
+    df = pd.read_csv(io.BytesIO(data))
+    return {"columns": list(df.columns), "rows": len(df)}
 
 
-def render_agent_pipeline(state: dict):
-    statuses = compute_agent_statuses(state)
-    cols = st.columns(6)
-    icon = {"completed": "✅", "running": "🟠", "pending": "⚪"}
-    for col, agent in zip(cols, AGENT_ORDER):
-        status, duration = statuses[agent]
-        with col:
-            st.markdown(f"**{icon[status]} {AGENT_LABELS[agent]}**")
-            if status == "completed":
-                st.caption(f"Completed · {duration:.2f}s" if duration is not None else "Completed")
-            elif status == "running":
-                st.caption("Running…")
-            else:
-                st.caption("Pending")
+def live_runs_active() -> int:
+    return sum(1 for p in process_registry().values() if p["mode"] == "live" and p["proc"].poll() is None)
 
 
-def render_metrics_row(state: dict):
-    metrics = state.get("metrics") or {}
-    history = state["iteration_history"]
-    prev = history[-1] if history else None
-
-    c1, c2, c3, c4 = st.columns(4)
-    auc = metrics.get("auc_roc")
-    f1 = metrics.get("f1_weighted")
-    c1.metric("AUC-ROC", f"{auc:.3f}" if auc is not None else "—",
-               delta=(f"{auc - prev.get('auc_roc', auc):+.3f}" if auc is not None and prev and prev.get("auc_roc") is not None else None))
-    c2.metric("F1 Score", f"{f1:.3f}" if f1 is not None else "—",
-               delta=(f"{f1 - prev.get('f1_weighted', f1):+.3f}" if f1 is not None and prev and prev.get("f1_weighted") is not None else None))
-    tokens = state.get("token_usage", {})
-    total_cost = sum(
-        u.get("input_tokens", 0) / 1e6 * 1.00 + u.get("output_tokens", 0) / 1e6 * 5.00
-        for u in tokens.values()
-    )
-    c3.metric("API cost so far", f"${total_cost:.4f}")
-    c4.metric("Iteration", f"{state['iteration'] + (0 if state.get('stop_reason') else 1)} / {state['max_iterations']}")
-
-
-def render_reflection_panel(state: dict):
-    st.subheader(f"Reflection · after iteration {state['iteration']}")
-    if state.get("weakest_component") is None:
-        st.info("No diagnosis yet — reflection hasn't completed an iteration.")
-        return
-    st.markdown(f"**Weakest component:** `{state['weakest_component']}`")
-    st.markdown("**Diagnosis**")
-    st.write(state.get("current_failure_mode") or "—")
-    st.markdown("**Instruction for next attempt**")
-    st.write(state.get("current_instruction") or "—")
-    if state.get("stop_reason"):
-        st.caption(f"Loop stopped: `{state['stop_reason']}` — this instruction was not consumed.")
-
-
-with st.sidebar:
-    st.markdown("## 🔶 AutoDS")
-    page = st.radio("Workspace", ["Setup", "Live Run", "Reports"],
-                     index=["Setup", "Live Run", "Reports"].index(st.session_state.page), label_visibility="collapsed")
+def go(page: str):
     st.session_state.page = page
-    st.divider()
-    api_key_input = st.text_input(
-        "Anthropic API Key", type="password",
-        value=os.environ.get("ANTHROPIC_API_KEY", ""),
-        help="Used only for this session; never written to disk.",
+
+
+def kill_run(run: dict) -> None:
+    entry = process_registry().get(run["id"])
+    if entry and entry["proc"].poll() is None:
+        entry["proc"].kill()
+
+
+def start_run(mode: str, meta: dict, api_key: str = "", data: bytes = b"") -> None:
+    previous = st.session_state.run
+    if previous and not previous.get("finished"):
+        kill_run(previous)
+    run_dir = Path(tempfile.mkdtemp(prefix="autods_"))
+    (run_dir / "events.jsonl").touch()
+    env = dict(os.environ)
+    if mode == "live":
+        (run_dir / "data.csv").write_bytes(data)
+        (run_dir / "config.json").write_text(json.dumps({
+            "file_name": meta["file_name"], "target_column": meta["target_column"],
+            "positive_label": meta["positive_label"], "seed": meta["seed"],
+            "max_iterations": meta["max_iterations"], "performance_target": meta["performance_target"],
+        }))
+        env["ANTHROPIC_API_KEY"] = api_key
+    else:
+        env.pop("ANTHROPIC_API_KEY", None)
+    log = open(run_dir / "worker.log", "w")
+    proc = subprocess.Popen(
+        [sys.executable, str(APP_DIR / "autods_worker.py"), mode, str(run_dir)],
+        cwd=APP_DIR, env=env, stdout=log, stderr=log,
+    )
+    run_id = run_dir.name
+    process_registry()[run_id] = {"proc": proc, "mode": mode}
+    st.session_state.run = {
+        "id": run_id, "dir": str(run_dir), "mode": mode, "meta": meta,
+        "started": time.time(), "finished": False, "stopped": False, "result": None, "error": None,
+    }
+    st.session_state.report = None
+    st.session_state.page = "Live Run"
+
+
+def read_events(run: dict) -> dict:
+    view = {"state": None, "result": None, "error": None, "last_ts": run["started"]}
+    path = Path(run["dir"]) / "events.jsonl"
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return view
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        view["last_ts"] = event.get("ts", view["last_ts"])
+        if event["type"] == "state":
+            view["state"] = event["state"]
+        elif event["type"] == "done":
+            view["result"] = event["result"]
+        elif event["type"] == "error":
+            view["error"] = event["message"]
+    return view
+
+
+def initial_state(max_iterations: int) -> dict:
+    return {
+        "iteration": 0, "max_iterations": max_iterations, "stage_timings": [], "iteration_history": [],
+        "metrics": None, "stop_reason": None, "weakest_component": None,
+        "current_failure_mode": None, "current_instruction": None,
+    }
+
+
+def refresh_run(run: dict) -> dict:
+    view = read_events(run)
+    entry = process_registry().get(run["id"])
+    alive = bool(entry) and entry["proc"].poll() is None
+    if alive and time.time() - run["started"] > MAX_RUN_SECONDS:
+        kill_run(run)
+        run["error"] = f"Run stopped after {MAX_RUN_SECONDS // 60} minutes."
+        alive = False
+    if view["result"] is not None:
+        run["finished"], run["result"] = True, view["result"]
+        st.session_state.report = {"result": view["result"], "meta": run["meta"], "run_id": run["id"]}
+    elif view["error"]:
+        run["finished"], run["error"] = True, view["error"]
+    elif not alive and not run["finished"]:
+        run["finished"] = True
+        if not run["stopped"] and not run["error"]:
+            tail = ""
+            try:
+                tail = (Path(run["dir"]) / "worker.log").read_text()[-400:]
+            except OSError:
+                pass
+            run["error"] = "The run ended unexpectedly." + (f" {tail.strip()}" if tail.strip() else "")
+    return view
+
+
+def chrome(live: bool = False):
+    st.markdown(f"<style>{(APP_DIR / 'assets' / 'autods.css').read_text()}</style>", unsafe_allow_html=True)
+    if live:
+        st.markdown(
+            "<style>section[data-testid='stSidebar']{display:none !important}"
+            ".block-container{padding-left:44px !important}</style>",
+            unsafe_allow_html=True,
+        )
+    st.markdown(
+        f'<div class="topbar"><div class="brand">{LOGO}<span>AutoDS</span></div>'
+        + ('' if live else '<div class="avatar" title="AutoDS">BA</div>')
+        + '</div>',
+        unsafe_allow_html=True,
     )
 
+
+def sidebar() -> tuple:
+    with st.sidebar:
+        st.markdown('<div class="ws-label">WORKSPACE</div>', unsafe_allow_html=True)
+        for name, slug in (("Setup", "setup"), ("Live run", "live"), ("Reports", "reports")):
+            page = "Live Run" if slug == "live" else name
+            active = st.session_state.page == page
+            st.button(name, key=f"nav_{slug}_{'on' if active else 'off'}", on_click=go, args=(page,))
+        with st.container(key="key_box"):
+            api_key = st.text_input(
+                "Anthropic API key", type="password", value=os.environ.get("ANTHROPIC_API_KEY", ""),
+                placeholder="sk-ant-…", help="Used only for your run. Never written to disk or shared.",
+            )
+            st.caption("Your key stays in this session and is passed only to your own run.")
+        with st.container(key="upload_box"):
+            uploaded = st.file_uploader("Upload Dataset", type=["csv"], label_visibility="collapsed")
+    return api_key, uploaded
+
+
+def page_setup(api_key: str, uploaded):
+    st.markdown("<h1>Setup</h1><div class='subtitle'>Start a new automated modeling run</div>", unsafe_allow_html=True)
+
+    info, data = None, b""
+    if uploaded is not None:
+        data = uploaded.getvalue()
+        try:
+            info = inspect_csv(data)
+        except Exception as exc:
+            st.error(f"Could not read this file as a CSV: {exc}")
+
+    with st.container(key="card_dataset"):
+        st.markdown("<h3>Dataset &amp; Target</h3>", unsafe_allow_html=True)
+        if info:
+            size = len(data) / 1e6
+            size_text = f"{size:.1f}mb" if size >= 0.1 else f"{len(data) / 1e3:.0f}kb"
+            st.markdown(
+                f'<div class="filebox"><div class="file">{FILE_ICON}<div><strong>{uploaded.name}</strong>'
+                f'<span>{size_text} · {info["rows"]:,} rows · {len(info["columns"])} columns</span></div></div>{CHECK_ICON}</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<div class="filebox empty">Upload a CSV with <b>&nbsp;Upload Dataset&nbsp;</b> in the sidebar to begin.</div>',
+                unsafe_allow_html=True,
+            )
+        c1, c2 = st.columns(2, gap="large")
+        columns = info["columns"] if info else []
+        target = c1.selectbox("Target column", columns, index=len(columns) - 1 if columns else None,
+                              placeholder="Upload a dataset first", disabled=not columns)
+        seed = c2.number_input("Random seed", min_value=0, step=1, key="seed")
+
+    with st.container(key="card_loop"):
+        st.markdown("<h3>Loop Settings</h3>", unsafe_allow_html=True)
+        with st.container(key="loop_box"):
+            c1, c2 = st.columns(2, gap="large")
+            with c1:
+                st.slider("Max Iterations", 1, 5, key="max_iterations")
+                st.caption("Maximum number of iterations to run")
+            with c2:
+                st.slider("Target AUC-ROC", 0.50, 0.99, step=0.01, key="target_auc")
+                st.caption("Stop when this performance target is reached")
+
+    rows = info["rows"] if info else 7000
+    lo, hi = core.estimate_minutes(rows, st.session_state.max_iterations)
+    preset = json.dumps({
+        "target_column": target, "seed": int(seed),
+        "max_iterations": st.session_state.max_iterations, "performance_target": st.session_state.target_auc,
+    }, indent=2)
+    ready = bool(info and target and api_key)
+    with st.container(key="card_run"):
+        with st.container(key="runbar"):
+            c_est, c_save, c_run = st.columns([1.3, 1, 1], gap="large", vertical_alignment="center")
+            c_est.markdown(f'<div class="est">{CLOCK_ICON}<span>Est. {lo}-{hi} min</span></div>', unsafe_allow_html=True)
+            c_save.download_button("Save Preset", data=preset, file_name="autods_preset.json",
+                                   mime="application/json", use_container_width=True)
+            run_clicked = c_run.button("Run Pipeline", type="primary", use_container_width=True, disabled=not ready)
+        if not info:
+            hint = "Upload a dataset to enable the run."
+        elif not api_key:
+            hint = "Add your Anthropic API key in the sidebar to enable the run."
+        else:
+            hint = "Each run calls the Anthropic API with your key; the estimate is approximate."
+        st.markdown(f'<div class="note">{hint}</div>', unsafe_allow_html=True)
+        with st.container(key="demo_link"):
+            st.button("Or watch a recorded run (Telco churn, seed 42; no API key needed)",
+                      key="replay_btn", on_click=lambda: start_demo(), type="tertiary")
+
+    if run_clicked:
+        try:
+            df = pd.read_csv(io.BytesIO(data), usecols=[target])
+            positive = core.detect_positive_label(df[target])
+        except ValueError as exc:
+            st.error(str(exc))
+            return
+        if live_runs_active() >= MAX_CONCURRENT_LIVE_RUNS:
+            st.error("The server is busy with other runs. Try again in a few minutes, or watch the recorded run.")
+            return
+        start_run("live", {
+            "file_name": uploaded.name, "target_column": target, "positive_label": positive,
+            "seed": int(seed), "max_iterations": st.session_state.max_iterations,
+            "performance_target": st.session_state.target_auc,
+        }, api_key=api_key, data=data)
+        st.rerun()
+
+
+def start_demo():
+    demo = core.load_demo()
+    start_run("replay", {
+        "file_name": demo["file_name"], "target_column": demo["target_column"],
+        "positive_label": demo["positive_label"], "seed": demo["config"]["seed"],
+        "max_iterations": demo["config"]["max_iterations"],
+        "performance_target": demo["config"]["performance_target"], "recorded": True,
+    })
+
+
+def live_body(run: dict):
+    view = refresh_run(run)
+    meta = run["meta"]
+    state = view["state"] or initial_state(meta["max_iterations"])
+    running = None
+    if not run["finished"]:
+        running = max(0.0, time.time() - view["last_ts"])
+    if run["finished"] and view["state"] is None:
+        state = initial_state(meta["max_iterations"])
+    if meta.get("recorded"):
+        st.markdown(
+            '<div class="alert">Replaying a recorded run of the real pipeline (Telco churn, seed 42). '
+            'Metrics and diagnoses are as logged; per-stage times are apportioned from the logged per-agent totals.</div>',
+            unsafe_allow_html=True,
+        )
+    st.markdown(
+        core.live_view_html(state, meta["file_name"], meta["seed"], meta["performance_target"], running),
+        unsafe_allow_html=True,
+    )
+    with st.container(key="liveactions"):
+        if run["error"]:
+            st.markdown(f'<div class="alert error">{run["error"]}</div>', unsafe_allow_html=True)
+        if run["result"] is not None and run["result"].get("used_fallback"):
+            st.markdown(
+                '<div class="alert">One or more agents fell back to default plans (the language-model call failed). '
+                'If this was unexpected, check that your Anthropic API key is valid and has credit.</div>',
+                unsafe_allow_html=True,
+            )
+        if not run["finished"]:
+            if st.button("Stop run", key="stop_btn"):
+                run["stopped"] = True
+                kill_run(run)
+                st.rerun()
+        elif run["result"] is not None:
+            if st.button("View Reports →", type="primary", key="to_reports"):
+                go("Reports")
+                st.rerun()
+        elif st.button("Back to Setup", key="to_setup"):
+            go("Setup")
+            st.rerun()
+    if run["finished"] and st.session_state.get("_polling", False):
+        st.session_state["_polling"] = False
+        st.rerun()
+
+
+def page_live():
+    st.markdown("<h1>Live Run</h1>", unsafe_allow_html=True)
+    with st.container(key="backbtn"):
+        st.button("Back", key="back_btn", on_click=go, args=("Setup",))
+    run = st.session_state.run
+    if run is None:
+        st.markdown("<div class='subtitle'>No run in progress.</div>", unsafe_allow_html=True)
+        st.button("Go to Setup", on_click=go, args=("Setup",), type="primary")
+        return
+    polling = not run["finished"]
+    st.session_state["_polling"] = polling
+    st.fragment(live_body, run_every=1.0 if polling else None)(run)
+
+
+def page_reports():
+    report = st.session_state.report
+    st.markdown("<h1>Reports</h1>", unsafe_allow_html=True)
+    if report is None:
+        st.markdown("<div class='subtitle'>No completed run yet. Finish a run to see its report here.</div>", unsafe_allow_html=True)
+        st.button("Go to Setup", on_click=go, args=("Setup",), type="primary")
+        return
+    result, meta = report["result"], report["meta"]
+    points = core.result_points(result)
+    if not points:
+        st.warning("This run finished without any evaluated iteration.")
+        return
+    chosen = core.selected_entry(result) or {}
+    tag = "recorded run" if meta.get("recorded") else f"seed {meta['seed']}"
+    st.markdown(
+        f'<div class="subline"><span class="meta">{core.DB_ICON}'
+        f'{meta["file_name"]}<span class="dot">•</span>{tag}<span class="dot">•</span>'
+        f'{result.get("iteration_count")} iterations</span></div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(f'<div class="kpis-panel">{core.kpi_html(result, points)}</div>', unsafe_allow_html=True)
+    stop = (result.get("extra_params") or {}).get("stop_reason", "")
+    st.markdown(
+        f'<div class="chart-card">{core.line_chart_svg(points)}'
+        f'<div class="note">Reported model: iteration {chosen.get("iteration")} ({chosen.get("model")}), the highest-F1 '
+        f'iteration within the AUC tolerance band: AUC-ROC {chosen.get("auc_roc")}, F1 {chosen.get("f1_weighted")}. '
+        f'Loop stopped: {str(stop).replace("_", " ")}.</div></div>',
+        unsafe_allow_html=True,
+    )
+    cache_key = f"pdf_{report['run_id']}"
+    if cache_key not in st.session_state:
+        st.session_state[cache_key] = core.build_pdf(result, meta["file_name"], meta["target_column"])
+    config = json.dumps(
+        core.model_config(result, meta["file_name"], meta["target_column"], meta["positive_label"]),
+        indent=2, default=core.json_default,
+    )
+    stem = Path(meta["file_name"]).stem
+    with st.container(key="reportbar"):
+        c1, c2 = st.columns(2, gap="large")
+        c1.download_button("Export as PDF", data=st.session_state[cache_key], file_name=f"autods_{stem}_report.pdf",
+                           mime="application/pdf", use_container_width=True)
+        c2.download_button("Download Model Config", data=config, file_name=f"autods_{stem}_model_config.json",
+                           mime="application/json", type="primary", use_container_width=True)
+    st.markdown(
+        '<div class="note">Model Config is the reproducible specification of the selected pipeline '
+        '(cleaning plan, feature plan, model, hyperparameters, threshold). AutoDS does not persist a fitted model object.</div>',
+        unsafe_allow_html=True,
+    )
+
+
+live = st.session_state.page == "Live Run"
+chrome(live=live)
+api_key_value, uploaded_file = sidebar()
 
 if st.session_state.page == "Setup":
-    st.title("Setup")
-    st.caption("Start a new automated modeling run")
-
-    dataset_name = st.selectbox("Dataset", list(DATASETS.keys()))
-    spec = DATASETS[dataset_name]
-    c1, c2 = st.columns(2)
-    c1.text_input("Target column", value=spec["target"], disabled=True)
-    seed = c2.number_input("Random seed", value=42, step=1)
-
-    st.markdown("#### Loop settings")
-    c1, c2 = st.columns(2)
-    max_iterations = c1.slider("Max iterations", 1, 5, MAX_ITERATIONS_FULL)
-    target_auc = c2.slider("Target AUC-ROC", 0.50, 0.99, PERFORMANCE_TARGET, 0.01)
-    optuna_trials = st.slider(
-        "Optuna trials", 2, 25, 10,
-        help="25 is the real full-budget value used in the actual experiment. Lower = faster demo.",
-    )
-    # Rough seconds per Optuna trial, from measured runs.
-    est_low = 0.02 * optuna_trials
-    est_high = 0.7 * optuna_trials
-    st.caption(
-        f"⏱ Estimated: {est_low * 1:.0f}s–{est_high * max_iterations:.0f}s "
-        f"(dominated by Optuna; wildly dataset-dependent — see conversation history for why)."
-    )
-
-    if st.button("Run Pipeline", type="primary", disabled=not api_key_input, use_container_width=True):
-        st.session_state.pending_run = {
-            "dataset_name": dataset_name, "seed": int(seed),
-            "max_iterations": max_iterations, "target_auc": target_auc,
-            "optuna_trials": optuna_trials, "api_key": api_key_input,
-        }
-        st.session_state.page = "Live Run"
-        st.rerun()
-    if not api_key_input:
-        st.warning("Enter an Anthropic API key to enable the run button.")
-
-
-elif st.session_state.page == "Live Run":
-    st.title("Live Run")
-
-    if st.session_state.pending_run is not None:
-        cfg = st.session_state.pending_run
-        st.session_state.pending_run = None
-        os.environ["ANTHROPIC_API_KEY"] = cfg["api_key"]
-
-        st.caption(f"{cfg['dataset_name']} · seed {cfg['seed']}")
-        pipeline_box = st.empty()
-        metrics_box = st.empty()
-        chart_box = st.empty()
-        reflection_box = st.empty()
-
-        df, target_col = load_dataset(cfg["dataset_name"])
-        positive_label = DATASETS[cfg["dataset_name"]]["positive_label"]
-        train_df, test_df = make_split(df, target_col, cfg["seed"])
-
-        t0 = time.perf_counter()
-        last_state = None
-        for state in run_agentic_streaming(
-            train_df, test_df, target_col, positive_label, cfg["dataset_name"], cfg["seed"],
-            max_iterations=cfg["max_iterations"], optuna_trials=cfg["optuna_trials"],
-            performance_target=cfg["target_auc"], no_improvement_epsilon=NO_IMPROVEMENT_EPSILON,
-        ):
-            last_state = state
-            with pipeline_box.container():
-                render_agent_pipeline(state)
-            with metrics_box.container():
-                render_metrics_row(state)
-            points = chart_points(state)
-            if not points.empty:
-                chart_box.line_chart(points.set_index("iteration")[["AUC-ROC", "F1 Score"]])
-            with reflection_box.container():
-                render_reflection_panel(state)
-
-        wallclock = round(time.perf_counter() - t0, 3)
-        result = build_result_from_state(
-            last_state, cfg["dataset_name"], cfg["seed"], cfg["max_iterations"],
-            cfg["optuna_trials"], cfg["target_auc"],
-        )
-        result.runtime_wallclock_sec = wallclock
-
-        st.session_state.last_state = last_state
-        st.session_state.run_result = result
-        st.session_state.run_config = cfg
-        st.success(f"Run complete — stop_reason: `{result.extra_params.get('stop_reason')}`")
-        if st.button("View Reports →", type="primary"):
-            st.session_state.page = "Reports"
-            st.rerun()
-
-    elif st.session_state.last_state is not None:
-        state = st.session_state.last_state
-        st.caption(f"{st.session_state.run_config['dataset_name']} · seed {st.session_state.run_config['seed']} (last completed run)")
-        render_agent_pipeline(state)
-        render_metrics_row(state)
-        points = chart_points(state)
-        if not points.empty:
-            st.line_chart(points.set_index("iteration")[["AUC-ROC", "F1 Score"]])
-        render_reflection_panel(state)
-    else:
-        st.info("Start a run from **Setup**.")
-
-
-elif st.session_state.page == "Reports":
-    st.title("Reports")
-    result = st.session_state.run_result
-    state = st.session_state.last_state
-
-    if result is None:
-        st.info("No completed run yet — start one from **Setup**.")
-    else:
-        cfg = st.session_state.run_config
-        st.caption(f"{cfg['dataset_name']} · seed {cfg['seed']}")
-
-        points = chart_points(state)
-        best_auc = points["AUC-ROC"].max() if not points.empty else None
-        best_auc_iter = int(points.loc[points["AUC-ROC"].idxmax(), "iteration"]) if not points.empty else None
-        best_f1 = points["F1 Score"].max() if not points.empty else None
-
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Best AUC-ROC", f"{best_auc:.3f}" if best_auc is not None else "—",
-                   delta=f"iter {best_auc_iter}" if best_auc_iter else None)
-        c2.metric("Best F1 Score", f"{best_f1:.3f}" if best_f1 is not None else "—")
-        c3.metric("Total API cost", f"${result.api_token_cost_usd:.4f}" if result.api_token_cost_usd else "$0.0000")
-        mins, secs = divmod(int(result.runtime_wallclock_sec or 0), 60)
-        c4.metric("Total runtime", f"{mins:02d}:{secs:02d}")
-
-        st.markdown("#### Metric by iteration")
-        if not points.empty:
-            st.line_chart(points.set_index("iteration")[["AUC-ROC", "F1 Score"]])
-
-        st.markdown("#### Automation score")
-        st.progress(automation_score(result.stage_automation), text=f"{automation_score(result.stage_automation):.0%} of stages completed without human intervention")
-        st.json(result.stage_automation, expanded=False)
-
-        st.markdown("#### Per-iteration trail")
-        for entry in result.iteration_metrics or []:
-            with st.expander(f"Iteration {entry['iteration']} — {entry.get('model')}"):
-                st.write(f"Metrics: accuracy={entry.get('accuracy')}, f1={entry.get('f1_weighted')}, auc={entry.get('auc_roc')}")
-                d = entry.get("diagnosis", {})
-                if d:
-                    st.write(f"**Diagnosis:** {d.get('failure_mode')}")
-                    st.write(f"**Instruction:** {d.get('instruction')}")
-
-        st.divider()
-        c1, c2 = st.columns(2)
-        with c1:
-            import dataclasses
-            import json as _json
-            payload = _json.dumps(dataclasses.asdict(result), indent=2, default=str)
-            st.download_button("⬇ Export results as JSON", data=payload,
-                                file_name=f"autods_{cfg['dataset_name']}_seed{cfg['seed']}.json",
-                                mime="application/json", use_container_width=True)
-        with c2:
-            model = state.get("model") if state else None
-            if model is not None:
-                buf = io.BytesIO()
-                pickle.dump(model, buf)
-                st.download_button("⬇ Download trained model (.pkl)", data=buf.getvalue(),
-                                    file_name=f"autods_{cfg['dataset_name']}_seed{cfg['seed']}_model.pkl",
-                                    mime="application/octet-stream", use_container_width=True)
-            else:
-                st.button("⬇ Download trained model (.pkl)", disabled=True, use_container_width=True)
+    page_setup(api_key_value, uploaded_file)
+elif live:
+    page_live()
+else:
+    page_reports()
