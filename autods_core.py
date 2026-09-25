@@ -28,6 +28,16 @@ DB_ICON = (
     '<path d="M4 13.5v4c0 1.8 3.6 3.2 8 3.2s8-1.4 8-3.2v-4c0 1.8-3.6 3.2-8 3.2s-8-1.4-8-3.2z" fill="#F5893F"/></svg>'
 )
 
+SAMPLE_DIR = Path(__file__).parent / "sample_data"
+SAMPLE_DATASETS = [
+    {"file": "telco_churn.csv", "title": "Telco Customer Churn", "target": "Churn", "positive": "Yes",
+     "drop": ["customerID"], "blurb": "7,043 customers; will they churn?"},
+    {"file": "credit_default.csv", "title": "Credit Card Default", "target": "default.payment.next.month", "positive": 1,
+     "drop": [], "blurb": "30,000 cardholders; will they default next month?"},
+    {"file": "stroke.csv", "title": "Stroke Prediction", "target": "stroke", "positive": 1,
+     "drop": ["id"], "blurb": "5,110 patients; did they have a stroke?"},
+]
+
 DEMO_PATH = Path(__file__).parent / "demo" / "telco_churn_seed42.json"
 
 
