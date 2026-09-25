@@ -13,6 +13,7 @@ streamlit run autods_dashboard.py
 
 - Runs use your own Anthropic API key, entered in the sidebar. It is passed only to your run's worker process and never written to disk.
 - "Watch a recorded run" replays a real logged Telco churn run (seed 42) without an API key.
+- **Upload Dataset** opens a picker with three built-in datasets (Telco churn, credit default, stroke; in `sample_data/`) or your own CSV.
 - Uploaded data is read once by the worker and deleted from disk; at most two live runs execute at a time.
 - "Download Model Config" exports the selected pipeline's specification (cleaning and feature plans, model, hyperparameters, threshold). A fitted model object is not persisted.
 
@@ -25,3 +26,7 @@ streamlit run autods_dashboard.py
 ## Experiments
 
 `run_experiments.py`, `baseline_manual.py` and `baseline_h2o.py` reproduce the thesis grid (Telco churn, credit default, stroke; seeds 42, 123, 2024). Tests: `python test_*.py`.
+
+## Data sources
+
+The built-in datasets are public benchmark data redistributed for reproducibility: Telco Customer Churn (IBM sample data, via Kaggle), Default of Credit Card Clients (UCI Machine Learning Repository), and Stroke Prediction (Kaggle). Check each source's terms before reusing them.

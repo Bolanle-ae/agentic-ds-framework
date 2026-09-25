@@ -75,18 +75,15 @@ section[data-testid="stSidebar"] > div { background: transparent; }
 .st-key-key_box label p { font-size: 12px; font-weight: 600; }
 .st-key-key_box [data-testid="stCaptionContainer"] { font-size: 12px; }
 .st-key-upload_box { margin-top: auto; padding-top: 21px; }
-.st-key-upload_box [data-testid="stFileUploaderDropzone"] {
-  position: relative; height: 46px; background: transparent; border: 3px dashed var(--orange); border-radius: 20px; padding: 0; display: block; cursor: pointer;
+.st-key-upload_box button {
+  position: relative; height: 46px; background: transparent !important; border: 3px dashed var(--orange) !important; border-radius: 20px; padding: 0 0 0 33px; min-height: 46px;
 }
-.st-key-upload_box [data-testid="stFileUploaderDropzone"] > *:not(input) { display: none !important; }
-.st-key-upload_box label { display: none; }
-.st-key-upload_box [data-testid="stFileUploaderDropzone"]::after {
-  content: "Upload Dataset"; font-size: 15px; font-weight: 500; position: absolute; inset: 0; display: grid; place-items: center; padding-left: 33px;
-}
-.st-key-upload_box [data-testid="stFileUploaderDropzone"]::before {
+.st-key-upload_box button p { font-size: 15px; font-weight: 500; }
+.st-key-upload_box button::before {
   content: ""; position: absolute; left: 20px; top: 50%; transform: translateY(-50%); width: 28px; height: 26px;
   background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 34'><path d='M10 30a8 8 0 0 1-1-15.9A11 11 0 0 1 30 12a9 9 0 0 1 1 18z' fill='%23FF8A3D'/><path d='M20 26V14m-6 6l6-6 6 6' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>") no-repeat center / contain;
 }
+[class*="st-key-sample_"] { background: var(--surface); border-radius: 14px; padding: 12px 18px; margin-bottom: 8px; }
 
 [class*="st-key-card_"] { background: var(--surface); border-radius: 22px; padding: 20px 26px 22px; margin-bottom: 12px; }
 [class*="st-key-card_"] h3, .card-title { font-size: 15px; font-weight: 600; margin: 0 0 10px; padding: 0; }
@@ -207,3 +204,6 @@ button[kind="secondary"]:hover { border-color: var(--orange); color: var(--ink);
 .subline { font-size: 15px; margin: 8px 0 14px; }
 .alert { background: #FBE9DF; border: 1.5px solid var(--orange); border-radius: 10px; padding: 10px 15px; font-size: 12px; margin-bottom: 12px; }
 .alert.error { background: #F8DCD6; border-color: #C4553B; }
+
+[data-testid="stIconMaterial"], span[class*="material"] { font-family: "Material Symbols Rounded", "Material Symbols Outlined" !important; }
+[data-testid="stDialog"] code, .stApp code { color: var(--ink) !important; background: #fff !important; }

@@ -41,7 +41,7 @@ CLOCK_ICON = (
 )
 
 for key, default in {
-    "page": "Setup", "run": None, "report": None, "seed": 42,
+    "page": "Setup", "run": None, "report": None, "seed": 42, "dataset": None,
     "max_iterations": DEFAULT_MAX_ITERATIONS, "target_auc": DEFAULT_TARGET_AUC,
 }.items():
     if key not in st.session_state:
@@ -176,7 +176,42 @@ def chrome(live: bool = False):
     )
 
 
-def sidebar() -> tuple:
+def set_dataset(name: str, data: bytes, target: str, positive=None) -> None:
+    info = inspect_csv(data)
+    st.session_state.dataset = {"name": name, "data": data, "target": target, "positive": positive}
+    st.session_state.target_col = target if target in info["columns"] else info["columns"][-1]
+
+
+def choose_sample(spec: dict) -> None:
+    df = pd.read_csv(core.SAMPLE_DIR / spec["file"])
+    df = df.drop(columns=[c for c in spec["drop"] if c in df.columns])
+    set_dataset(spec["file"], df.to_csv(index=False).encode(), spec["target"], spec["positive"])
+
+
+@st.dialog("Choose a dataset", width="large")
+def dataset_dialog() -> None:
+    st.caption("Pick one of the built-in datasets, or upload your own CSV.")
+    for spec in core.SAMPLE_DATASETS:
+        with st.container(key=f"sample_{spec['file']}"):
+            left, right = st.columns([3, 1], vertical_alignment="center")
+            left.markdown(f"**{spec['title']}**  \n{spec['blurb']} Target: `{spec['target']}`.")
+            if right.button("Use this", key=f"use_{spec['file']}", use_container_width=True):
+                choose_sample(spec)
+                st.rerun()
+    st.markdown("**Or upload your own**")
+    uploaded = st.file_uploader("CSV file", type=["csv"], label_visibility="collapsed")
+    if uploaded is not None:
+        data = uploaded.getvalue()
+        try:
+            columns = inspect_csv(data)["columns"]
+        except Exception as exc:
+            st.error(f"Could not read this file as a CSV: {exc}")
+        else:
+            set_dataset(uploaded.name, data, columns[-1])
+            st.rerun()
+
+
+def sidebar() -> str:
     with st.sidebar:
         st.markdown('<div class="ws-label">WORKSPACE</div>', unsafe_allow_html=True)
         for name, slug in (("Setup", "setup"), ("Live run", "live"), ("Reports", "reports")):
@@ -190,20 +225,19 @@ def sidebar() -> tuple:
             )
             st.caption("Your key stays in this session and is passed only to your own run.")
         with st.container(key="upload_box"):
-            uploaded = st.file_uploader("Upload Dataset", type=["csv"], label_visibility="collapsed")
-    return api_key, uploaded
+            if st.button("Upload Dataset", key="open_upload", use_container_width=True):
+                dataset_dialog()
+    return api_key
 
 
-def page_setup(api_key: str, uploaded):
+def page_setup(api_key: str):
     st.markdown("<h1>Setup</h1><div class='subtitle'>Start a new automated modeling run</div>", unsafe_allow_html=True)
 
+    dataset = st.session_state.dataset
     info, data = None, b""
-    if uploaded is not None:
-        data = uploaded.getvalue()
-        try:
-            info = inspect_csv(data)
-        except Exception as exc:
-            st.error(f"Could not read this file as a CSV: {exc}")
+    if dataset is not None:
+        data = dataset["data"]
+        info = inspect_csv(data)
 
     with st.container(key="card_dataset"):
         st.markdown("<h3>Dataset &amp; Target</h3>", unsafe_allow_html=True)
@@ -211,19 +245,19 @@ def page_setup(api_key: str, uploaded):
             size = len(data) / 1e6
             size_text = f"{size:.1f}mb" if size >= 0.1 else f"{len(data) / 1e3:.0f}kb"
             st.markdown(
-                f'<div class="filebox"><div class="file">{FILE_ICON}<div><strong>{uploaded.name}</strong>'
+                f'<div class="filebox"><div class="file">{FILE_ICON}<div><strong>{dataset['name']}</strong>'
                 f'<span>{size_text} · {info["rows"]:,} rows · {len(info["columns"])} columns</span></div></div>{CHECK_ICON}</div>',
                 unsafe_allow_html=True,
             )
         else:
             st.markdown(
-                '<div class="filebox empty">Upload a CSV with <b>&nbsp;Upload Dataset&nbsp;</b> in the sidebar to begin.</div>',
+                '<div class="filebox empty">Choose a dataset with <b>&nbsp;Upload Dataset&nbsp;</b> in the sidebar to begin.</div>',
                 unsafe_allow_html=True,
             )
         c1, c2 = st.columns(2, gap="large")
         columns = info["columns"] if info else []
-        target = c1.selectbox("Target column", columns, index=len(columns) - 1 if columns else None,
-                              placeholder="Upload a dataset first", disabled=not columns)
+        target = c1.selectbox("Target column", columns, key="target_col",
+                              placeholder="Choose a dataset first", disabled=not columns)
         seed = c2.number_input("Random seed", min_value=0, step=1, key="seed")
 
     with st.container(key="card_loop"):
@@ -252,7 +286,7 @@ def page_setup(api_key: str, uploaded):
                                    mime="application/json", use_container_width=True)
             run_clicked = c_run.button("Run Pipeline", type="primary", use_container_width=True, disabled=not ready)
         if not info:
-            hint = "Upload a dataset to enable the run."
+            hint = "Choose a dataset to enable the run."
         elif not api_key:
             hint = "Add your Anthropic API key in the sidebar to enable the run."
         else:
@@ -264,8 +298,10 @@ def page_setup(api_key: str, uploaded):
 
     if run_clicked:
         try:
-            df = pd.read_csv(io.BytesIO(data), usecols=[target])
-            positive = core.detect_positive_label(df[target])
+            if dataset["positive"] is not None and target == dataset["target"]:
+                positive = dataset["positive"]
+            else:
+                positive = core.detect_positive_label(pd.read_csv(io.BytesIO(data), usecols=[target])[target])
         except ValueError as exc:
             st.error(str(exc))
             return
@@ -273,7 +309,7 @@ def page_setup(api_key: str, uploaded):
             st.error("The server is busy with other runs. Try again in a few minutes, or watch the recorded run.")
             return
         start_run("live", {
-            "file_name": uploaded.name, "target_column": target, "positive_label": positive,
+            "file_name": dataset["name"], "target_column": target, "positive_label": positive,
             "seed": int(seed), "max_iterations": st.session_state.max_iterations,
             "performance_target": st.session_state.target_auc,
         }, api_key=api_key, data=data)
@@ -401,10 +437,10 @@ def page_reports():
 
 live = st.session_state.page == "Live Run"
 chrome(live=live)
-api_key_value, uploaded_file = sidebar()
+api_key_value = sidebar()
 
 if st.session_state.page == "Setup":
-    page_setup(api_key_value, uploaded_file)
+    page_setup(api_key_value)
 elif live:
     page_live()
 else:
